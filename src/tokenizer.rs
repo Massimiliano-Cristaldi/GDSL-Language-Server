@@ -1,35 +1,22 @@
-use crate::common::*;
+use crate::{common::{DataType, Token, TokenKind}, tables::{BUILT_IN_FUNCTIONS, GLOBALS, MISC_KEYWORDS, OPERATORS, SYMBOLS, TYPE_KEYWORDS}};
 
 const BREAKPOINTS: [char; 13] = [
     ',', ';', '+', '-', '*', '/', '=', '(', ')', '[', ']', '{', '}',
 ];
 
-#[derive(Clone, Copy, Debug)]
-pub struct Token<'a> {
-    pub value: &'a str,
-    pub r#type: TokenType,
-    pub line: usize,
-    pub tail: usize,
-    pub is_mut: bool
+trait TokenChar {
+    fn is_blank(&self) -> bool;
+    fn char_offset(&self) -> usize;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TokenType {
-    Unknown,
-    Symbol,
-    Operator,
-    MiscKeyword,
-    TypeKeyword,
-    Ident(DataType),
-    Global(DataType),
-    IntLit,
-    FloatLit,
-    Comment,
-}
+impl TokenChar for char {
+    fn is_blank(&self) -> bool {
+        return [' ', '\t', '\r'].contains(self);
+    }
 
-impl<'a> Token<'a> {
-    pub fn is_ident(&'a self) -> bool {
-        return matches!(self.r#type, TokenType::Ident(_));
+    //TODO: read tabsize from settings rather than using a hardcoded value
+    fn char_offset(&self) -> usize {
+        return if *self == '\t' { 4 } else { 1 };
     }
 }
 
@@ -69,7 +56,7 @@ impl<'a> Tokenizer<'a> {
         };
     }
 
-    pub fn tokenize(&'a mut self) -> &'a Vec<Token<'a>> {
+    pub fn tokenize(mut self) -> Vec<Token<'a>> {
         let mut iterator = self.src.chars().peekable();
 
         while let Some(curr) = iterator.next() {
@@ -96,7 +83,7 @@ impl<'a> Tokenizer<'a> {
             }
             
             self.src_head += curr.len_utf8();
-            self.line_head += curr.len_utf8();
+            self.line_head += curr.char_offset();
 
             let next = iterator.peek();
             
@@ -131,7 +118,7 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        return &self.tokens;
+        return self.tokens;
     }
 
     fn is_token_start(&self, curr: &char) -> bool {
@@ -150,14 +137,10 @@ impl<'a> Tokenizer<'a> {
              || (*curr == '.' && self.context == TContext::FloatDecl && !next.is_digit(10))
              || (*next == '.' && self.context != TContext::IntDecl)
              || (*curr == '/' && self.context == TContext::CommentBlockEnd)
-             || Self::is_blank(next)
+             || next.is_blank()
             }
             None => true,
         };
-    }
-
-    fn is_blank(c: &char) -> bool {
-        return [' ', '\t', '\r'].contains(c);
     }
 
     fn is_in_comment(&self) -> bool {
@@ -173,11 +156,11 @@ impl<'a> Tokenizer<'a> {
         && let Some(line_tail) = self.line_tail
         {
             let value = &self.src[src_tail..self.src_head];
-            let r#type = self.get_token_type(value);
+            let kind = self.get_token_kind(value);
 
             let token = Token {
                 value,
-                r#type,
+                kind,
                 line: self.curr_line,
                 tail: line_tail,
                 is_mut: false
@@ -193,25 +176,25 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn get_token_type(&self, token_value: &str) -> TokenType {
+    fn get_token_kind(&self, token_value: &str) -> TokenKind {
         return match self.context {
-            TContext::IntDecl => TokenType::IntLit,
-            TContext::FloatDecl => TokenType::FloatLit,
-            TContext::CommentBlock | TContext::CommentBlockEnd | TContext::CommentLine => TokenType::Comment,
+            TContext::IntDecl => TokenKind::IntLit,
+            TContext::FloatDecl => TokenKind::FloatLit,
+            TContext::CommentBlock | TContext::CommentBlockEnd | TContext::CommentLine => TokenKind::Comment,
             _ => {
                 //We match GLOBALS separately to avoid a double lookup (if contains_key => get)
                 let value = token_value;
-                if let Some(token_type) = GLOBALS.get(&value) {
-                    return TokenType::Global(*token_type);
+                if let Some(kind) = GLOBALS.get(&value) {
+                    return TokenKind::Global(*kind);
                 }
 
                 match value {
-                    value if MISC_KEYWORDS.contains(&value) => TokenType::MiscKeyword,
-                    value if TYPE_KEYWORDS.contains_key(&value) => TokenType::TypeKeyword,
-                    value if OPERATORS.contains(&value) => TokenType::Operator,
-                    value if SYMBOLS.contains(&value) => TokenType::Symbol,
-                    value if BUILT_IN_FUNCTIONS.contains_key(&value) => TokenType::Ident(DataType::Function),
-                    _ => TokenType::Ident(DataType::Unknown),
+                    value if MISC_KEYWORDS.contains(&value) => TokenKind::MiscKeyword,
+                    value if TYPE_KEYWORDS.contains_key(&value) => TokenKind::TypeKeyword,
+                    value if OPERATORS.contains(&value) => TokenKind::Operator,
+                    value if SYMBOLS.contains(&value) => TokenKind::Symbol,
+                    value if BUILT_IN_FUNCTIONS.contains_key(&value) => TokenKind::Ident(DataType::Fn),
+                    _ => TokenKind::Ident(DataType::Unknown),
                 }
             }
         };

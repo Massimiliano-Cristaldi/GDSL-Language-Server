@@ -1,12 +1,14 @@
-#![allow(unused_variables)]
-
 use tokenizer::Tokenizer;
-mod tokenizer;
+use parser::Parser;
+
 mod common;
+mod tables;
+mod tokenizer;
+mod parser;
+
+#[cfg(test)]
+mod tests;
 
 fn main() {
 
 }
-
-#[cfg(test)]
-mod tests;

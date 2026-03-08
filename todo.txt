@@ -1,4 +1,0 @@
-Lista delle feature da implementare:
-Semantic highlighting
-Reassignment of const/redeclaration of variable diagnostics
-Use of uninitialized variable diagnostics
