@@ -123,16 +123,20 @@ pub struct Token<'a> {
 }
 
 impl<'a> Token<'a> {
-    pub fn is_ident(&'a self) -> bool {
-        return matches!(self.kind, TokenKind::Ident(_));
-    }
-
     pub fn len(&'a self) -> usize {
         return self.value.chars().count();
     }
+
+    pub fn is_fn(&'a self) -> bool {
+        return self.kind == TokenKind::Ident(DataType::Fn);
+    }
+    
+    pub fn is_ident(&'a self) -> bool {
+        return matches!(self.kind, TokenKind::Ident(_));
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SymbolType {
     ParenOpen,
     ParenClosed,
@@ -142,7 +146,9 @@ pub enum SymbolType {
     CurlyClosed
 }
 
+#[derive(Clone, Debug)]
 pub struct Function {
     //TODO
-    pub args: Option<i32>
+    pub args: Vec<DataType>,
+    pub ret_type: DataType
 }

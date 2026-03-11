@@ -1,4 +1,5 @@
-use crate::{common::{DataType, Token, TokenKind}, tables::{BUILT_IN_FUNCTIONS, GLOBALS, MISC_KEYWORDS, OPERATORS, SYMBOLS, TYPE_KEYWORDS}};
+use crate::tables::{OPERATORS, SYMBOLS, MISC_KEYWORDS, TYPE_KEYWORDS, GLOBALS, BUILT_IN_FUNCTIONS};
+use crate::common::{DataType, Token, TokenKind};
 
 const BREAKPOINTS: [char; 13] = [
     ',', ';', '+', '-', '*', '/', '=', '(', ')', '[', ']', '{', '}',

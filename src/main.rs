@@ -1,3 +1,6 @@
+//TODO: remove for production build
+#![cfg_attr(debug_assertions, allow(unused))]
+
 use tokenizer::Tokenizer;
 use parser::Parser;
 
