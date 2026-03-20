@@ -6,6 +6,7 @@ use parser::Parser;
 
 mod common;
 mod tables;
+
 mod tokenizer;
 mod parser;
 
