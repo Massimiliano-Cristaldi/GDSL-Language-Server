@@ -78,19 +78,19 @@ fn test2() {
 
     let expected = [
         Diagnostic::new(
-            String::from("Unexpected token kind: expected 'float literal | float (highp)', found 'int literal'"),
+            String::from("Unexpected token kind: expected 'float literal', found 'int literal'"),
             7,
             25,
             26,
         ),
         Diagnostic::new(
-            String::from("Unexpected token kind: expected 'float literal | float (highp)', found 'keyword'"),
+            String::from("Unexpected token kind: expected 'float literal', found 'keyword'"),
             9,
             18,
             24,
         ),
         Diagnostic::new(
-            String::from("Unexpected token value: expected ';', found 'return'"),
+            String::from("Unexpected token: 'return'"),
             9,
             25,
             31,

@@ -61,8 +61,8 @@ impl<'a> Parser<'a> {
                 ParserCtx::FnCall(_) => {
                     self.fn_call_branch(token, &mut curr_ctx)
                 }
-                ParserCtx::Operation(_) => {
-                    self.operation_branch(token, &mut curr_ctx)
+                ParserCtx::Expr(_) => {
+                    self.expr_branch(token, &mut curr_ctx)
                 }
                 ParserCtx::Cast(_) => {
                     self.cast_branch(token, &mut curr_ctx)
@@ -90,16 +90,17 @@ impl<'a> Parser<'a> {
     }
 
     fn ident_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let ctx_data = ctx.as_ident_decl_ctx();
+        let ident_decl_ctx = ctx.as_ident_decl_ctx();
         
-        match ctx_data.subcontext {
+        match ident_decl_ctx.subcontext {
             0 => {
                 self.expect_kind(&token, TokenKind::TypeKeyword);
-                ctx_data.subcontext += 1;   
+                ident_decl_ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
+                ident_decl_ctx.subcontext += 1;  
             }
             1 => {
                 self.expect_kind(&token, TokenKind::Ident(DataType::Unknown));
-                ctx_data.subcontext += 1;
+                ident_decl_ctx.subcontext += 1;
             }
             2 => {
                 if token.value == "(" {
@@ -107,74 +108,50 @@ impl<'a> Parser<'a> {
                     return;
                 }
 
-                self.expect_value(&token, "=");
-                ctx_data.subcontext += 1;
-            }
-            3 => {
-                match ctx_data.ident_type {
-                    data_type @ (DataType::I8 | DataType::I16 | DataType::I32) => {
-                        self.expect_one_of_kinds(
-                            &token,
-                            &[TokenKind::IntLit, TokenKind::Ident(data_type)],
-                        );
-                    },
-                    data_type @ (DataType::F8 | DataType::F16 | DataType::F32) => {
-                        self.expect_one_of_kinds(
-                            &token,
-                            &[TokenKind::FloatLit, TokenKind::Ident(data_type)],
-                        );
-                    },
-                    DataType::Unknown => {
-                        self.push_diagnostic(&token, String::from("Use of ident before assignment"));
-                    },
-                    data_type => {
-                        self.expect_kind(&token, TokenKind::Ident(data_type));
-                    }
+                if self.expect_value(&token, "=") {
+                    let expr_result_type = ident_decl_ctx.ident_type.clone();
+                    self.enter_ctx(ctx, ParserCtx::new_expr());
+                    ctx.as_expr_ctx().result_type = expr_result_type;
+                } else {
+                    self.exit_ctx(ctx);
                 }
-
-                ctx_data.subcontext += 1;
-            }
-            4 => {
-                //TODO handle expressions before semicolon
-                self.expect_value(&token, ";");
-                ctx_data.subcontext += 1;
             }
             _ => {
-                self.exit_ctx(ctx);
+                unreachable!();
             }
         }
     }
 
     fn fn_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let ctx_data = ctx.as_fn_decl_ctx();
+        let fn_decl_ctx = ctx.as_fn_decl_ctx();
         
-        match ctx_data.subcontext {
+        match fn_decl_ctx.subcontext {
             0 => {
                 if token.value == ")" {
-                    ctx_data.subcontext = 3;
+                    fn_decl_ctx.subcontext = 3;
                     return;
                 }
                 
                 if self.expect_kind(&token, TokenKind::TypeKeyword) {
                     //We can safely unwrap because TypeKeyword tokens can only be created
                     //when the tokenizer finds the token value in the TYPE_KEYWORDS map
-                    ctx_data.args.push(*TYPE_KEYWORDS.get(token.value).unwrap());
+                    fn_decl_ctx.args.push(*TYPE_KEYWORDS.get(token.value).unwrap());
                 }
 
-                ctx_data.subcontext += 1;
+                fn_decl_ctx.subcontext += 1;
             }
             1 => {
                 self.expect_kind(&token, TokenKind::Ident(DataType::Unknown));
-                ctx_data.subcontext += 1;
+                fn_decl_ctx.subcontext += 1;
             }
             2 => {
                 if token.value == "," {
-                    ctx_data.subcontext = 0;
+                    fn_decl_ctx.subcontext = 0;
                     return;
                 }
 
                 self.expect_value(&token, ")");
-                ctx_data.subcontext += 1;
+                fn_decl_ctx.subcontext += 1;
             }
             3 => {
                 if self.expect_value(&token, "{") {
@@ -191,9 +168,9 @@ impl<'a> Parser<'a> {
     }
 
     fn fn_call_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let ctx_data = ctx.as_fn_call_ctx();
+        let fn_call_ctx = ctx.as_fn_call_ctx();
         
-        match ctx_data.subcontext {
+        match fn_call_ctx.subcontext {
             0 => {
                 return;
             },
@@ -203,13 +180,126 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn operation_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let ctx_data = ctx.as_operation_ctx();
+    fn expr_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+        let expr_ctx = ctx.as_expr_ctx();
         
-        match ctx_data.subcontext {
+        match expr_ctx.subcontext {
             0 => {
-                return;
+                match token.kind {
+                    TokenKind::Ident(data_type) => {
+                        if let Some(next_token) = self.peek(1)
+                        && next_token.value == "("
+                        {
+                            expr_ctx.subcontext = 1;
+
+                            self.skip(1);
+                            self.enter_ctx(ctx, ParserCtx::new_fn_call());
+                            return;
+                        }
+
+                        if (data_type == DataType::Unknown) {
+                            expr_ctx.subcontext = 1;
+
+                            self.push_diagnostic(
+                                &token,
+                                String::from("Use of variable before declaration")
+                            );
+                            return;
+                        }
+
+                        //TODO: identifiers should be already classified as arrays by the tokenizer 
+                        if let Some(vec_type) = token.try_vec_type()
+                        && vec_type == expr_ctx.result_type
+                        {
+                            //TODO: vec component access subcontext
+                            expr_ctx.subcontext = 100;
+                        } else if data_type != expr_ctx.result_type {
+                            expr_ctx.subcontext = 1;
+
+                            self.push_diagnostic(
+                                &token,
+                                format!("Unexpected variable type: expected {}, found {}", expr_ctx.result_type, data_type)
+                            );
+                        }
+                    }
+                    TokenKind::Operator => {
+                        if self.expect_one_of_values(&token, &["+", "-"]) {
+                            //TODO:: unary operation subcontext
+                        }
+                    }
+                    TokenKind::Symbol => {
+                        match token.value {
+                            "(" => {
+                                expr_ctx.brackets.push('(');
+                            }
+                            "[" => {
+                                expr_ctx.brackets.push('[');
+                            }
+                            "{" => {
+                                //TODO: array initialization subcontext
+                            }
+                            ")" => {
+                                match expr_ctx.brackets.last() {
+                                    Some(&'(') => {},
+                                    _ => self.push_generic_diagnostic(&token)
+                                }
+                            }
+                            "]" => {
+                                match expr_ctx.brackets.last() {
+                                    Some(&'[') => {},
+                                    _ => self.push_generic_diagnostic(&token)
+                                }
+                            }
+                            _ => {
+                                self.push_generic_diagnostic(&token);
+                            }
+                        }
+
+                        expr_ctx.subcontext = 1;
+                    }
+                    TokenKind::TypeKeyword => {
+                        if let Some(next_token) = self.peek(1) 
+                        && next_token.value == "["
+                        {
+
+                            //TODO: array initialization subcontext
+                        }
+                    }
+                    _ => {
+                        match expr_ctx.result_type {
+                            DataType::I8 | DataType::I16 | DataType::I32 => {
+                                self.expect_kind(&token, TokenKind::IntLit);
+                            }
+                            DataType::F8 | DataType::F16 | DataType::F32 => {
+                                self.expect_kind(&token, TokenKind::FloatLit);
+                            }
+                            _ => {
+                                self.push_generic_diagnostic(&token);
+                            }
+                        }
+
+                        expr_ctx.subcontext = 1;
+                    }
+                }
             },
+            1 => {
+                match token.kind {
+                    TokenKind::Operator => {
+                        expr_ctx.subcontext = 0;
+                    }
+                    _ => {
+                        if token.value == ";" {
+                            self.exit_ctx(ctx);
+                        } else {
+                            self.push_generic_diagnostic(&token);
+                        }
+                    }
+                }
+            }
+            //Expect vector component access
+            100 => {
+                
+            }
             _ => {
                 self.exit_ctx(ctx);
                 return;
@@ -275,16 +365,12 @@ impl<'a> Parser<'a> {
         }
     }
 
+            //
     fn expect_kind(&mut self, token: &Token, kind: TokenKind) -> bool {
-        let token_kind = if token.is_fn() {
-            self.resolve_fn_type(token.value)
-        } else {
-            token.kind
-        };
-
-        if token_kind == kind {
+        if self.resolve_token_kind(token) == kind {
             return true;
         } else {
+            //TODO: expected should be stringified as generic (e.g. "float" instead of "float literal")
             self.push_diagnostic(
                 token,
                 format!("Unexpected token kind: expected '{}', found '{}'", kind, token.kind)
@@ -310,13 +396,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_one_of_kinds(&mut self, token: &Token, kinds: &[TokenKind]) -> bool {
-        let token_kind = if token.is_fn() {
-            self.resolve_fn_type(token.value)
-        } else {
-            token.kind
-        };
-
-        if kinds.contains(&token_kind) {
+        if kinds.contains(&self.resolve_token_kind(token)) {
             return true;
         } else {
             let mut expected = String::new();
@@ -338,13 +418,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn resolve_fn_type(&self, fn_name: &str) -> TokenKind {
-        return match BUILT_IN_FUNCTIONS.get(fn_name) {
-            Some(func) => TokenKind::Ident(func.ret_type),
-            None => match self.functions.get(fn_name) {
+    //TODO: functions can be declared after they're invoked
+    fn resolve_token_kind(&self, token: &Token) -> TokenKind {
+        if token.is_fn() {
+            return match BUILT_IN_FUNCTIONS.get(token.value) {
                 Some(func) => TokenKind::Ident(func.ret_type),
-                None => panic!("Attempting to read unknown function's signature: {}", fn_name)
+                None => match self.functions.get(token.value) {
+                    Some(func) => TokenKind::Ident(func.ret_type),
+                    None => panic!("Attempting to read unknown function's signature: {}", token.value)
+                }
             }
+        } else {
+            return token.kind;
         }
     }
 
@@ -376,6 +461,13 @@ impl<'a> Parser<'a> {
         
         self.diagnostics.push(diagnostic);
     }
+
+    fn push_generic_diagnostic(&mut self, token: &Token) -> () {
+        self.push_diagnostic(
+            &token, 
+            format!("Unexpected token: '{}'", token.value)
+        );
+    }
 }
 
 struct ParserEnv<'a> {
@@ -406,11 +498,13 @@ struct FnCallCtx {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct OperationCtx {
+struct ExprCtx {
     subcontext: usize,
     lhs: Option<DataType>,
     operator: &'static str,
     rhs: DataType,
+    result_type: DataType,
+    brackets: Vec<char>
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -424,7 +518,7 @@ enum ParserCtx {
     IdentDecl(IdentDeclCtx),
     FnDecl(FnDeclCtx),
     FnCall(FnCallCtx),
-    Operation(OperationCtx),
+    Expr(ExprCtx),
     Cast(CastCtx),
 }
 
@@ -455,12 +549,14 @@ impl ParserCtx {
         });
     }
 
-    fn new_operation() -> ParserCtx {
-        return ParserCtx::Operation(OperationCtx {
+    fn new_expr() -> ParserCtx {
+        return ParserCtx::Expr(ExprCtx {
             subcontext: 0,
             lhs: None,
             operator: "",
             rhs: DataType::Unknown,
+            result_type: DataType::Unknown,
+            brackets: Vec::with_capacity(10)
         });
     }
 
@@ -492,16 +588,16 @@ impl ParserCtx {
         }
     }
     
-    fn as_operation_ctx(&mut self) -> &mut OperationCtx {
-        if let ParserCtx::Operation(context) = self {
+    fn as_expr_ctx(&mut self) -> &mut ExprCtx {
+        if let ParserCtx::Expr(context) = self {
             return context;
         } else {
             panic!("Expected Operation");
         }
     }
 
-    fn as_cast_ctx(&mut self) -> &mut OperationCtx {
-        if let ParserCtx::Operation(context) = self {
+    fn as_cast_ctx(&mut self) -> &mut CastCtx {
+        if let ParserCtx::Cast(context) = self {
             return context;
         } else {
             panic!("Expected Operation");

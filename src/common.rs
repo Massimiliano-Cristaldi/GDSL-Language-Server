@@ -6,9 +6,13 @@ pub enum DataType {
     I8,
     I16,
     I32,
+    UInt,
     F8,
     F16,
     F32,
+    BVec2,
+    BVec3,
+    BVec4,
     FVec2,
     FVec3,
     FVec4,
@@ -45,9 +49,13 @@ impl Display for DataType {
             DataType::I8 => "int (lowp)",
             DataType::I16 => "int (mediump)",
             DataType::I32 => "int (highp)",
+            DataType::UInt => "unsigned int",
             DataType::F8 => "float (lowp)",
             DataType::F16 => "float (mediump)",
             DataType::F32 => "float (highp)",
+            DataType::BVec2 => "bvec2",
+            DataType::BVec3 => "bvec3",
+            DataType::BVec4 => "bvec4",
             DataType::FVec2 => "vec2",
             DataType::FVec3 => "vec3",
             DataType::FVec4 => "vec4",
@@ -130,7 +138,22 @@ impl<'a> Token<'a> {
     pub fn is_fn(&'a self) -> bool {
         return self.kind == TokenKind::Ident(DataType::Fn);
     }
-    
+
+    pub fn try_vec_type(&'a self) -> Option<DataType> {
+        if let TokenKind::Ident(ident_type) = self.kind {
+            return match ident_type {
+                DataType::BVec2 | DataType::BVec3 | DataType::BVec4 => Some(DataType::Bool),
+                //TODO: handle precision
+                DataType::FVec2 | DataType::FVec3 | DataType::FVec4 => Some(DataType::F32),
+                DataType::IVec2 | DataType::IVec3 | DataType::IVec4 => Some(DataType::I32),
+                DataType::UVec2 | DataType::UVec3 | DataType::UVec4 => Some(DataType::UInt),
+                _ => None
+            };
+        } else {
+            return None;
+        }
+    }
+
     pub fn is_ident(&'a self) -> bool {
         return matches!(self.kind, TokenKind::Ident(_));
     }
