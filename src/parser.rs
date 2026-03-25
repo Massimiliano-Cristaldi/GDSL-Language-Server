@@ -1,5 +1,6 @@
 use core::panic;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::mem;
 use std::sync::LazyLock;
 use std::task::Context;
@@ -11,8 +12,9 @@ pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     curr_index: usize,
     scope: Scope,
+    global_idents: HashMap<&'a str, DataType>,
+    scope_idents: HashMap<&'a str, DataType>,
     prev_ctxs: Vec<ParserCtx>,
-    idents: HashMap<&'a str, DataType>,
     functions: HashMap<&'a str, Function>,
     diagnostics: Vec<Diagnostic>
 }
@@ -36,7 +38,8 @@ impl<'a> Parser<'a> {
             curr_index: 0,
             scope: Scope::Global,
             prev_ctxs: vec![],
-            idents: HashMap::new(),
+            global_idents: HashMap::new(),
+            scope_idents: HashMap::with_capacity(32),
             functions: HashMap::new(),
             diagnostics: Vec::with_capacity(256)
         }
@@ -55,6 +58,15 @@ impl<'a> Parser<'a> {
                 ParserCtx::IdentDecl(_) => {
                     self.ident_decl_branch(token, &mut curr_ctx)
                 }
+                ParserCtx::IdentAssign(_) => {
+                    self.ident_assign_branch(token, &mut curr_ctx)
+                }
+                ParserCtx::ArrDecl(_) => {
+                    self.arr_decl_branch(token, &mut curr_ctx)
+                }
+                ParserCtx::ArrAssign(_) => {
+                    self.arr_assign_branch(token, &mut curr_ctx)
+                }
                 ParserCtx::FnDecl(_) => {
                     self.fn_decl_branch(token, &mut curr_ctx)
                 }
@@ -72,11 +84,9 @@ impl<'a> Parser<'a> {
                 }
             };
 
-            println!("{curr_ctx:?}");
-
             //TODO: check if function declarations can be nested in GDSL
-            //TODO: do this in the FnDecl branch
             if self.scope == Scope::FnBody && token.value == "}" {
+                self.scope_idents.clear();
                 self.scope = Scope::Global;
             }
 
@@ -89,31 +99,89 @@ impl<'a> Parser<'a> {
         return self.diagnostics;
     }
 
-    fn ident_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+    fn ident_decl_branch(&mut self, token: Token<'a>, ctx: &mut ParserCtx) -> () {
         let ident_decl_ctx = ctx.as_ident_decl_ctx();
         
         match ident_decl_ctx.subcontext {
             0 => {
                 self.expect_kind(&token, TokenKind::TypeKeyword);
                 ident_decl_ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
-                ident_decl_ctx.subcontext += 1;  
+                ident_decl_ctx.subcontext = 1;  
             }
             1 => {
-                self.expect_kind(&token, TokenKind::Ident(DataType::Unknown));
-                ident_decl_ctx.subcontext += 1;
+                match token.kind {
+                    TokenKind::Ident(_) => {
+                        if self.scope_idents.contains_key(token.value)
+                        || self.global_idents.contains_key(token.value)
+                        {
+                            self.push_diagnostic(
+                                &token,
+                                format!("Cannot redeclare variable {}", token.value)
+                            );
+
+                            ident_decl_ctx.subcontext = 2;
+                            return;
+                        }
+                        
+                        ident_decl_ctx.ident_name = String::from(token.value);
+                        
+                        match self.scope {
+                            Scope::FnBody => {
+                                self.scope_idents.insert(
+                                    token.value,
+                                    ident_decl_ctx.ident_type
+                                );
+                            }
+                            Scope::Global => {
+                                self.global_idents.insert(
+                                    token.value,
+                                    ident_decl_ctx.ident_type
+                                );
+                            }
+                        };
+
+                        ident_decl_ctx.subcontext = 2;
+                    }
+                    TokenKind::Global(_) => {
+                        self.push_diagnostic(
+                            &token,
+                            format!("Cannot redeclare global variable {}", token.value)
+                        );
+
+                        ident_decl_ctx.subcontext = 2;
+                    }
+                    _ => {
+                        self.push_generic_diagnostic(&token);
+                        self.exit_ctx(ctx);
+                    }
+                }
             }
             2 => {
-                if token.value == "(" {
-                    *ctx = ParserCtx::new_fn_decl();
-                    return;
-                }
+                match token.value {
+                    "(" => {
+                        *ctx = ParserCtx::new_fn_decl();
+                        return;                        
+                    }
+                    "[" => {
+                        *ctx = ParserCtx::new_arr_decl();
+                        return;                        
+                    }
+                    "=" => {
+                        let expr_result_type = ident_decl_ctx.ident_type.clone();
 
-                if self.expect_value(&token, "=") {
-                    let expr_result_type = ident_decl_ctx.ident_type.clone();
-                    self.enter_ctx(ctx, ParserCtx::new_expr());
-                    ctx.as_expr_ctx().result_type = expr_result_type;
-                } else {
-                    self.exit_ctx(ctx);
+                        *ctx = ParserCtx::new_expr();
+                        ctx.as_expr_ctx().result_type = expr_result_type;                        
+                    }
+                    ";" => {
+                        self.scope_idents.insert(
+                            token.value,
+                            DataType::Unknown
+                        );
+                    }
+                    _ => {
+                        self.push_generic_diagnostic(&token);
+                        self.exit_ctx(ctx);
+                    }
                 }
             }
             _ => {
@@ -121,6 +189,28 @@ impl<'a> Parser<'a> {
             }
         }
     }
+
+    fn ident_assign_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+        //TODO
+    }
+    
+    fn arr_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+        //TODO
+        // self.expect_one_of_kinds(
+        //     &token,
+        //     &[
+        //         TokenKind::IntLit,
+        //         TokenKind::Ident(DataType::I8),
+        //         TokenKind::Ident(DataType::I16),
+        //         TokenKind::Ident(DataType::I32)
+        //     ]
+        // );
+    }
+
+    fn arr_assign_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+
+    }
+
 
     fn fn_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
         let fn_decl_ctx = ctx.as_fn_decl_ctx();
@@ -138,11 +228,11 @@ impl<'a> Parser<'a> {
                     fn_decl_ctx.args.push(*TYPE_KEYWORDS.get(token.value).unwrap());
                 }
 
-                fn_decl_ctx.subcontext += 1;
+                fn_decl_ctx.subcontext = 1;
             }
             1 => {
                 self.expect_kind(&token, TokenKind::Ident(DataType::Unknown));
-                fn_decl_ctx.subcontext += 1;
+                fn_decl_ctx.subcontext = 2;
             }
             2 => {
                 if token.value == "," {
@@ -151,7 +241,7 @@ impl<'a> Parser<'a> {
                 }
 
                 self.expect_value(&token, ")");
-                fn_decl_ctx.subcontext += 1;
+                fn_decl_ctx.subcontext = 3;
             }
             3 => {
                 if self.expect_value(&token, "{") {
@@ -161,8 +251,7 @@ impl<'a> Parser<'a> {
                 self.exit_ctx(ctx);
             }
             _ => {
-                self.exit_ctx(ctx);
-                return;
+                unreachable!();
             }
         }
     }
@@ -207,7 +296,6 @@ impl<'a> Parser<'a> {
                             return;
                         }
 
-                        //TODO: identifiers should be already classified as arrays by the tokenizer 
                         if let Some(vec_type) = token.try_vec_type()
                         && vec_type == expr_ctx.result_type
                         {
@@ -234,9 +322,6 @@ impl<'a> Parser<'a> {
                             }
                             "[" => {
                                 expr_ctx.brackets.push('[');
-                            }
-                            "{" => {
-                                //TODO: array initialization subcontext
                             }
                             ")" => {
                                 match expr_ctx.brackets.last() {
@@ -296,7 +381,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            //Expect vector component access
+            //TODO: Expect vector component access
             100 => {
                 
             }
@@ -325,16 +410,19 @@ impl<'a> Parser<'a> {
          match (token.kind, token.value) {
             (TokenKind::TypeKeyword, _) => {
                 self.enter_ctx(ctx, ParserCtx::new_ident_decl());
-                let ctx_data = ctx.as_ident_decl_ctx();
-                ctx_data.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
-                ctx_data.subcontext = 1;
+                let ident_decl_ctx = ctx.as_ident_decl_ctx();
+
+                //We can safely unwrap because TypeKeyword tokens can only be created
+                //when the tokenizer finds the token value in the TYPE_KEYWORDS map
+                ident_decl_ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
+                ident_decl_ctx.subcontext = 1;
             },
             (TokenKind::MiscKeyword, "uniform") |
             (TokenKind::MiscKeyword, "const") => {
                 self.enter_ctx(ctx, ParserCtx::new_ident_decl());
-                let ctx_data = ctx.as_ident_decl_ctx();
-                ctx_data.is_mut = false;
-                ctx_data.subcontext = 0;
+                let ident_decl_ctx = ctx.as_ident_decl_ctx();
+                ident_decl_ctx.is_mut = false;
+                ident_decl_ctx.subcontext = 0;
             }
             _ => {}
         }
@@ -418,6 +506,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn get_ident_type(&self, ident_name: &'a str) -> DataType {
+        //TODO: find a way to avoid heap allocation
+        match self.scope_idents.get(ident_name) {
+            Some(data_type) => return *data_type,
+            None => {
+                match self.global_idents.get(ident_name) {
+                    Some (data_type) => return *data_type,
+                    None => DataType::Unknown
+                }
+            }
+        }
+    }
+
     //TODO: functions can be declared after they're invoked
     fn resolve_token_kind(&self, token: &Token) -> TokenKind {
         if token.is_fn() {
@@ -481,8 +582,23 @@ struct ParserEnv<'a> {
 #[derive(Debug, Clone, PartialEq)]
 struct IdentDeclCtx {
     subcontext: usize,
+    ident_name: String,
     ident_type: DataType,
     is_mut: bool
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct IdentAssignCtx {
+    subcontext: usize,
+    ident_type: DataType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ArrDeclCtx {
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ArrAssignCtx {
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -516,6 +632,9 @@ struct CastCtx {
 enum ParserCtx {
     Default,
     IdentDecl(IdentDeclCtx),
+    IdentAssign(IdentAssignCtx),
+    ArrDecl(ArrDeclCtx),
+    ArrAssign(ArrAssignCtx),
     FnDecl(FnDeclCtx),
     FnCall(FnCallCtx),
     Expr(ExprCtx),
@@ -530,8 +649,26 @@ impl ParserCtx {
     fn new_ident_decl() -> ParserCtx {
         return ParserCtx::IdentDecl(IdentDeclCtx {
             subcontext: 0 ,
+            ident_name: String::new(),
             ident_type: DataType::Unknown,
             is_mut: false
+        });
+    }
+
+    fn new_ident_assign() -> ParserCtx {
+        return ParserCtx::IdentAssign(IdentAssignCtx {
+            subcontext: 0 ,
+            ident_type: DataType::Unknown,
+        });
+    }
+
+    fn new_arr_decl() -> ParserCtx {
+        return ParserCtx::ArrDecl(ArrDeclCtx {
+        });
+    }
+
+    fn new_arr_assign() -> ParserCtx {
+        return ParserCtx::ArrAssign(ArrAssignCtx {
         });
     }
 
@@ -566,6 +703,30 @@ impl ParserCtx {
 
     fn as_ident_decl_ctx(&mut self) -> &mut IdentDeclCtx {
         if let ParserCtx::IdentDecl(context) = self {
+            return context;
+        } else {
+            panic!("Expected IdentDecl");
+        }
+    }
+
+    fn as_ident_assign_ctx(&mut self) -> &mut IdentAssignCtx {
+        if let ParserCtx::IdentAssign(context) = self {
+            return context;
+        } else {
+            panic!("Expected IdentDecl");
+        }
+    }
+
+    fn as_arr_decl_ctx(&mut self) -> &mut ArrDeclCtx {
+        if let ParserCtx::ArrDecl(context) = self {
+            return context;
+        } else {
+            panic!("Expected IdentDecl");
+        }
+    }
+
+    fn as_arr_assign_ctx(&mut self) -> &mut ArrAssignCtx {
+        if let ParserCtx::ArrAssign(context) = self {
             return context;
         } else {
             panic!("Expected IdentDecl");
