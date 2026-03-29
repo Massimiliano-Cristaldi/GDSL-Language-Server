@@ -132,7 +132,7 @@ pub struct Token<'a> {
 
 impl<'a> Token<'a> {
     pub fn len(&'a self) -> usize {
-        return self.value.chars().count();
+        return self.value.len();
     }
 
     pub fn is_fn(&'a self) -> bool {
@@ -171,7 +171,12 @@ pub enum SymbolType {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    //TODO
     pub args: Vec<DataType>,
     pub ret_type: DataType
+}
+
+impl Function {
+    pub fn new(args: Vec<DataType>, ret_type: DataType) -> Function {
+        return Function { args, ret_type };
+    }
 }

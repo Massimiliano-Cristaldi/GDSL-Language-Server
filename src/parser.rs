@@ -111,9 +111,41 @@ impl<'a> Parser<'a> {
             1 => {
                 match token.kind {
                     TokenKind::Ident(_) => {
-                        if self.scope_idents.contains_key(token.value)
-                        || self.global_idents.contains_key(token.value)
-                        {
+                        let is_fn = match self.peek(1) {
+                            Some(next_token) => next_token.value == "(",
+                            None => false
+                        };
+
+                        if is_fn {
+                            if self.functions.contains_key(token.value) {
+                                self.push_diagnostic(
+                                    &token,
+                                    format!("Cannot redeclare function {}", token.value)
+                                );
+                            } else {
+                                self.functions.insert(
+                                    token.value,
+                                    Function::new(Vec::new(), ident_decl_ctx.ident_type)
+                                );
+                            }
+
+                            if self.scope == Scope::FnBody {
+                                self.push_diagnostic(
+                                    &token,
+                                    String::from("Cannot declare functions inside other functions")
+                                ); 
+                            }
+
+                            let ret_type = ident_decl_ctx.ident_type;
+                            
+                            *ctx = ParserCtx::new_fn_decl();
+                            ctx.as_fn_decl_ctx().ret_type = ret_type;
+
+                            self.curr_index += 1;
+                            return;   
+                        } 
+                        
+                        if self.scope_idents.contains_key(token.value) {
                             self.push_diagnostic(
                                 &token,
                                 format!("Cannot redeclare variable {}", token.value)
@@ -123,7 +155,6 @@ impl<'a> Parser<'a> {
                             return;
                         }
                         
-                        ident_decl_ctx.ident_name = String::from(token.value);
                         
                         match self.scope {
                             Scope::FnBody => {
@@ -140,6 +171,7 @@ impl<'a> Parser<'a> {
                             }
                         };
 
+                        ident_decl_ctx.is_valid_decl = true;
                         ident_decl_ctx.subcontext = 2;
                     }
                     TokenKind::Global(_) => {
@@ -158,10 +190,6 @@ impl<'a> Parser<'a> {
             }
             2 => {
                 match token.value {
-                    "(" => {
-                        *ctx = ParserCtx::new_fn_decl();
-                        return;                        
-                    }
                     "[" => {
                         *ctx = ParserCtx::new_arr_decl();
                         return;                        
@@ -173,10 +201,15 @@ impl<'a> Parser<'a> {
                         ctx.as_expr_ctx().result_type = expr_result_type;                        
                     }
                     ";" => {
-                        self.scope_idents.insert(
-                            token.value,
-                            DataType::Unknown
-                        );
+                        if ident_decl_ctx.is_valid_decl {
+                            //TODO: peek back
+                            self.scope_idents.insert(
+                                token.value,
+                                DataType::Unknown
+                            );
+                        }
+
+                        self.exit_ctx(ctx);
                     }
                     _ => {
                         self.push_generic_diagnostic(&token);
@@ -212,9 +245,9 @@ impl<'a> Parser<'a> {
     }
 
 
-    fn fn_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+    fn fn_decl_branch(&mut self, token: Token<'a>, ctx: &mut ParserCtx) -> () {
         let fn_decl_ctx = ctx.as_fn_decl_ctx();
-        
+
         match fn_decl_ctx.subcontext {
             0 => {
                 if token.value == ")" {
@@ -247,6 +280,12 @@ impl<'a> Parser<'a> {
                 if self.expect_value(&token, "{") {
                     self.scope = Scope::FnBody;
                 }
+
+                let args = mem::take(&mut fn_decl_ctx.args);
+                self.functions.insert(
+                    token.value,
+                    Function::new(args, fn_decl_ctx.ret_type)
+                );
 
                 self.exit_ctx(ctx);
             }
@@ -407,7 +446,7 @@ impl<'a> Parser<'a> {
     }
 
     fn default_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-         match (token.kind, token.value) {
+        match (token.kind, token.value) {
             (TokenKind::TypeKeyword, _) => {
                 self.enter_ctx(ctx, ParserCtx::new_ident_decl());
                 let ident_decl_ctx = ctx.as_ident_decl_ctx();
@@ -507,7 +546,6 @@ impl<'a> Parser<'a> {
     }
 
     fn get_ident_type(&self, ident_name: &'a str) -> DataType {
-        //TODO: find a way to avoid heap allocation
         match self.scope_idents.get(ident_name) {
             Some(data_type) => return *data_type,
             None => {
@@ -571,18 +609,10 @@ impl<'a> Parser<'a> {
     }
 }
 
-struct ParserEnv<'a> {
-    scope: Scope,
-    curr_ctx: ParserCtx,
-    prev_ctxs: Vec<ParserCtx>,
-    idents: HashMap<&'a str, DataType>,
-    functions: HashMap<&'a str, Function>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct IdentDeclCtx {
     subcontext: usize,
-    ident_name: String,
+    is_valid_decl: bool,
     ident_type: DataType,
     is_mut: bool
 }
@@ -605,6 +635,7 @@ struct ArrAssignCtx {
 struct FnDeclCtx {
     subcontext: usize,
     args: Vec<DataType>,
+    ret_type: DataType
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -648,8 +679,8 @@ impl ParserCtx {
     
     fn new_ident_decl() -> ParserCtx {
         return ParserCtx::IdentDecl(IdentDeclCtx {
-            subcontext: 0 ,
-            ident_name: String::new(),
+            subcontext: 0,
+            is_valid_decl: false,
             ident_type: DataType::Unknown,
             is_mut: false
         });
@@ -676,6 +707,7 @@ impl ParserCtx {
         return ParserCtx::FnDecl(FnDeclCtx {
             subcontext: 0,
             args: vec![],
+            ret_type: DataType::Unknown
         });
     }
 
