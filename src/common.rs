@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DataType {
@@ -127,7 +127,6 @@ pub struct Token<'a> {
     pub kind: TokenKind,
     pub line: usize,
     pub tail: usize,
-    pub is_mut: bool,
 }
 
 impl<'a> Token<'a> {
@@ -171,12 +170,12 @@ pub enum SymbolType {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub args: Vec<DataType>,
+    pub args: HashMap<String, DataType>,
     pub ret_type: DataType
 }
 
 impl Function {
-    pub fn new(args: Vec<DataType>, ret_type: DataType) -> Function {
+    pub fn new(args: HashMap<String, DataType>, ret_type: DataType) -> Function {
         return Function { args, ret_type };
     }
 }

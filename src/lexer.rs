@@ -22,7 +22,7 @@ impl TokenChar for char {
 }
 
 #[derive(Debug)]
-pub struct Tokenizer<'a> {
+pub struct Lexer<'a> {
     src: &'a str,
     curr_line: usize,
     src_tail: Option<usize>,
@@ -30,11 +30,11 @@ pub struct Tokenizer<'a> {
     line_tail: Option<usize>,
     line_head: usize,
     tokens: Vec<Token<'a>>,
-    context: TContext,
+    ctx: LexerCtx,
 }
 
 #[derive(PartialEq, Debug)]
-enum TContext {
+enum LexerCtx {
     Default,
     IntDecl,
     FloatDecl,
@@ -43,9 +43,9 @@ enum TContext {
     CommentBlockEnd
 }
 
-impl<'a> Tokenizer<'a> {
-    pub fn new(src: &'a str) -> Tokenizer<'a> {
-        return Tokenizer {
+impl<'a> Lexer<'a> {
+    pub fn new(src: &'a str) -> Lexer<'a> {
+        return Lexer {
             src: src,
             curr_line: 0,
             src_tail: None,
@@ -53,7 +53,7 @@ impl<'a> Tokenizer<'a> {
             line_tail: None,
             line_head: 0,
             tokens: Vec::new(),
-            context: TContext::Default,
+            ctx: LexerCtx::Default,
         };
     }
 
@@ -64,6 +64,10 @@ impl<'a> Tokenizer<'a> {
             if self.is_token_start(&curr) {
                 self.src_tail = Some(self.src_head);
                 self.line_tail = Some(self.line_head);
+
+                if curr.is_digit(10) {
+                    self.ctx = LexerCtx::IntDecl;
+                }
             }
 
             if curr == '\n' {
@@ -76,8 +80,8 @@ impl<'a> Tokenizer<'a> {
                 self.line_head = 0;
                 self.line_tail = None;
 
-                if self.context != TContext::CommentBlock {
-                    self.context = TContext::Default;
+                if self.ctx != LexerCtx::CommentBlock {
+                    self.ctx = LexerCtx::Default;
                 }
                 
                 continue;
@@ -88,12 +92,10 @@ impl<'a> Tokenizer<'a> {
 
             let next = iterator.peek();
             
-            if curr.is_digit(10) && self.context != TContext::FloatDecl {
-                self.context = TContext::IntDecl;
-            } else if curr == '.' {
-                match self.context {
-                    TContext::IntDecl => self.context = TContext::FloatDecl,
-                    TContext::CommentLine | TContext::CommentBlock | TContext::FloatDecl => {}
+            if curr == '.' {
+                match self.ctx {
+                    LexerCtx::IntDecl => self.ctx = LexerCtx::FloatDecl,
+                    LexerCtx::CommentLine | LexerCtx::CommentBlock | LexerCtx::FloatDecl => {}
                     _ => {
                         self.try_consume();
                         continue;
@@ -101,14 +103,14 @@ impl<'a> Tokenizer<'a> {
                 }
             } else if let Some(next) = next {
                 match (curr, next) {
-                    ('/', '/') if self.context != TContext::CommentBlock => {
-                        self.context = TContext::CommentLine;
+                    ('/', '/') if self.ctx != LexerCtx::CommentBlock => {
+                        self.ctx = LexerCtx::CommentLine;
                     },
-                    ('/', '*') if self.context != TContext::CommentLine  => {
-                        self.context = TContext::CommentBlock;
+                    ('/', '*') if self.ctx != LexerCtx::CommentLine  => {
+                        self.ctx = LexerCtx::CommentBlock;
                     },
-                    ('*', '/') if self.context == TContext::CommentBlock => {
-                        self.context = TContext::CommentBlockEnd;
+                    ('*', '/') if self.ctx == LexerCtx::CommentBlock => {
+                        self.ctx = LexerCtx::CommentBlockEnd;
                     },
                     _ => {}
                 }
@@ -134,10 +136,10 @@ impl<'a> Tokenizer<'a> {
             Some(next) => {
                 BREAKPOINTS.contains(curr)
              || BREAKPOINTS.contains(next)
-             || (*curr == '.' && self.context != TContext::FloatDecl)
-             || (*curr == '.' && self.context == TContext::FloatDecl && !next.is_digit(10))
-             || (*next == '.' && self.context != TContext::IntDecl)
-             || (*curr == '/' && self.context == TContext::CommentBlockEnd)
+             || (*curr == '.' && self.ctx != LexerCtx::FloatDecl)
+             || (*curr == '.' && self.ctx == LexerCtx::FloatDecl && !next.is_digit(10))
+             || (*next == '.' && self.ctx != LexerCtx::IntDecl)
+             || (*curr == '/' && self.ctx == LexerCtx::CommentBlockEnd)
              || next.is_blank()
             }
             None => true,
@@ -146,10 +148,10 @@ impl<'a> Tokenizer<'a> {
 
     fn is_in_comment(&self) -> bool {
         return [
-            TContext::CommentLine,
-            TContext::CommentBlock,
-            TContext::CommentBlockEnd
-        ].contains(&self.context);
+            LexerCtx::CommentLine,
+            LexerCtx::CommentBlock,
+            LexerCtx::CommentBlockEnd
+        ].contains(&self.ctx);
     }
 
     fn try_consume(&mut self) -> () {
@@ -164,24 +166,23 @@ impl<'a> Tokenizer<'a> {
                 kind,
                 line: self.curr_line,
                 tail: line_tail,
-                is_mut: false
             };
             self.tokens.push(token);
 
             self.src_tail = None;
             self.line_tail = None;
 
-            if self.context != TContext::CommentBlock {
-                self.context = TContext::Default;
+            if self.ctx != LexerCtx::CommentBlock {
+                self.ctx = LexerCtx::Default;
             }
         }
     }
 
     fn get_token_kind(&self, token_value: &str) -> TokenKind {
-        return match self.context {
-            TContext::IntDecl => TokenKind::IntLit,
-            TContext::FloatDecl => TokenKind::FloatLit,
-            TContext::CommentBlock | TContext::CommentBlockEnd | TContext::CommentLine => TokenKind::Comment,
+        return match self.ctx {
+            LexerCtx::IntDecl => TokenKind::IntLit,
+            LexerCtx::FloatDecl => TokenKind::FloatLit,
+            LexerCtx::CommentBlock | LexerCtx::CommentBlockEnd | LexerCtx::CommentLine => TokenKind::Comment,
             _ => {
                 //We match GLOBALS separately to avoid a double lookup (if contains_key => get)
                 let value = token_value;

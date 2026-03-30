@@ -1,7 +1,7 @@
 shader_type canvas_item;
 
-int foo(int num) {
-	return num + 1;
+int foo(int num1, int num2) {
+	return num1 + num2;
 }
 
 void fragment() {

@@ -15,7 +15,7 @@ fn tokens() {
         }
     };
 
-    let tokenizer = Tokenizer::new(&source);
+    let tokenizer = Lexer::new(&source);
     let tokens = tokenizer.tokenize();
     println!("{tokens:#?}");
 
@@ -35,7 +35,7 @@ fn test1() {
         }
     };
 
-    let tokenizer = Tokenizer::new(&source);
+    let tokenizer = Lexer::new(&source);
     let tokens = tokenizer.tokenize();
 
     let parser = Parser::new(tokens);
@@ -70,7 +70,7 @@ fn test2() {
         }
     };
 
-    let tokenizer = Tokenizer::new(&source);
+    let tokenizer = Lexer::new(&source);
     let tokens = tokenizer.tokenize();
 
     let parser = Parser::new(tokens);

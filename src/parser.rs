@@ -125,7 +125,7 @@ impl<'a> Parser<'a> {
                             } else {
                                 self.functions.insert(
                                     token.value,
-                                    Function::new(Vec::new(), ident_decl_ctx.ident_type)
+                                    Function::new(HashMap::new(), ident_decl_ctx.ident_type)
                                 );
                             }
 
@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
 
     fn fn_decl_branch(&mut self, token: Token<'a>, ctx: &mut ParserCtx) -> () {
         let fn_decl_ctx = ctx.as_fn_decl_ctx();
-
+        
         match fn_decl_ctx.subcontext {
             0 => {
                 if token.value == ")" {
@@ -256,15 +256,24 @@ impl<'a> Parser<'a> {
                 }
                 
                 if self.expect_kind(&token, TokenKind::TypeKeyword) {
-                    //We can safely unwrap because TypeKeyword tokens can only be created
-                    //when the tokenizer finds the token value in the TYPE_KEYWORDS map
-                    fn_decl_ctx.args.push(*TYPE_KEYWORDS.get(token.value).unwrap());
+                    let data_type = *TYPE_KEYWORDS.get(token.value).unwrap();
+                    
+                    fn_decl_ctx.curr_arg_type = data_type;
+                    fn_decl_ctx.subcontext = 1;
+                } else {
+                    fn_decl_ctx.subcontext = 3;
                 }
-
-                fn_decl_ctx.subcontext = 1;
             }
             1 => {
-                self.expect_kind(&token, TokenKind::Ident(DataType::Unknown));
+                if self.expect_kind(&token, TokenKind::Ident(DataType::Unknown)) {
+                    fn_decl_ctx.args.insert(
+                        String::from(token.value),
+                        fn_decl_ctx.curr_arg_type
+                    );
+                    
+                    fn_decl_ctx.curr_arg_type = DataType::Unknown;
+                }
+
                 fn_decl_ctx.subcontext = 2;
             }
             2 => {
@@ -287,6 +296,9 @@ impl<'a> Parser<'a> {
                     Function::new(args, fn_decl_ctx.ret_type)
                 );
 
+                //TODO: we should push a new context rather than switching directly,
+                //I don't remember why but I was thinking about this while I was trying
+                //to fall asleep and it felt really important
                 self.exit_ctx(ctx);
             }
             _ => {
@@ -319,19 +331,19 @@ impl<'a> Parser<'a> {
                         && next_token.value == "("
                         {
                             expr_ctx.subcontext = 1;
-
-                            self.skip(1);
                             self.enter_ctx(ctx, ParserCtx::new_fn_call());
+
+                            self.curr_index += 1;
                             return;
                         }
 
                         if (data_type == DataType::Unknown) {
-                            expr_ctx.subcontext = 1;
-
                             self.push_diagnostic(
                                 &token,
                                 String::from("Use of variable before declaration")
                             );
+                            
+                            expr_ctx.subcontext = 1;
                             return;
                         }
 
@@ -607,6 +619,24 @@ impl<'a> Parser<'a> {
             format!("Unexpected token: '{}'", token.value)
         );
     }
+
+    fn debug_iteration(&self, ctx: &ParserCtx) -> () {
+        if let Some(curr_token) = self.tokens.get(self.curr_index) {
+            let subcontext = match ctx {
+                ParserCtx::ArrAssign(ctx) => ctx.subcontext,
+                ParserCtx::ArrDecl(ctx) => ctx.subcontext,
+                ParserCtx::Cast(ctx) => ctx.subcontext,
+                ParserCtx::Expr(ctx) => ctx.subcontext,
+                ParserCtx::FnCall(ctx) => ctx.subcontext,
+                ParserCtx::FnDecl(ctx) => ctx.subcontext,
+                ParserCtx::IdentAssign(ctx) => ctx.subcontext,
+                ParserCtx::IdentDecl(ctx) => ctx.subcontext,
+                ParserCtx::Default => 0,
+            };
+
+            println!("curr_index: {} - token value: {} - subcontext: {}", self.curr_index, curr_token.value, subcontext);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -625,23 +655,25 @@ struct IdentAssignCtx {
 
 #[derive(Debug, Clone, PartialEq)]
 struct ArrDeclCtx {
+    subcontext: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ArrAssignCtx {
+    subcontext: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct FnDeclCtx {
     subcontext: usize,
-    args: Vec<DataType>,
+    curr_arg_type: DataType,
+    args: HashMap<String, DataType>,
     ret_type: DataType
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct FnCallCtx {
     subcontext: usize,
-    args: Vec<DataType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -695,18 +727,21 @@ impl ParserCtx {
 
     fn new_arr_decl() -> ParserCtx {
         return ParserCtx::ArrDecl(ArrDeclCtx {
+            subcontext: 0
         });
     }
 
     fn new_arr_assign() -> ParserCtx {
         return ParserCtx::ArrAssign(ArrAssignCtx {
+            subcontext: 0
         });
     }
 
     fn new_fn_decl() -> ParserCtx {
         return ParserCtx::FnDecl(FnDeclCtx {
             subcontext: 0,
-            args: vec![],
+            curr_arg_type: DataType::Unknown,
+            args: HashMap::new(),
             ret_type: DataType::Unknown
         });
     }
@@ -714,7 +749,6 @@ impl ParserCtx {
     fn new_fn_call() -> ParserCtx {
         return ParserCtx::FnCall(FnCallCtx {
             subcontext: 0,
-            args: vec![],
         });
     }
 
