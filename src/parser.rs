@@ -54,36 +54,51 @@ impl<'a> Parser<'a> {
                 continue;
             }
             
-            match curr_ctx {
-                ParserCtx::IdentDecl(_) => {
-                    self.ident_decl_branch(token, &mut curr_ctx)
+            let task = match curr_ctx {
+                ParserCtx::IdentDecl(ref mut ctx) => {
+                    self.ident_decl_branch(token, ctx)
                 }
-                ParserCtx::IdentAssign(_) => {
-                    self.ident_assign_branch(token, &mut curr_ctx)
+                ParserCtx::IdentAssign(ref mut ctx) => {
+                    self.ident_assign_branch(token, ctx)
                 }
-                ParserCtx::ArrDecl(_) => {
-                    self.arr_decl_branch(token, &mut curr_ctx)
+                ParserCtx::ArrDecl(ref mut ctx) => {
+                    self.arr_decl_branch(token, ctx)
                 }
-                ParserCtx::ArrAssign(_) => {
-                    self.arr_assign_branch(token, &mut curr_ctx)
+                ParserCtx::ArrAssign(ref mut ctx) => {
+                    self.arr_assign_branch(token, ctx)
                 }
-                ParserCtx::FnDecl(_) => {
-                    self.fn_decl_branch(token, &mut curr_ctx)
+                ParserCtx::FnDecl(ref mut ctx) => {
+                    self.fn_decl_branch(token, ctx)
                 }
-                ParserCtx::FnCall(_) => {
-                    self.fn_call_branch(token, &mut curr_ctx)
+                ParserCtx::FnCall(ref mut ctx) => {
+                    self.fn_call_branch(token, ctx)
                 }
-                ParserCtx::Expr(_) => {
-                    self.expr_branch(token, &mut curr_ctx)
+                ParserCtx::Expr(ref mut ctx) => {
+                    self.expr_branch(token, ctx)
                 }
-                ParserCtx::Cast(_) => {
-                    self.cast_branch(token, &mut curr_ctx)
+                ParserCtx::Cast(ref mut ctx) => {
+                    self.cast_branch(token, ctx)
                 }
                 ParserCtx::Default => {
-                    self.default_branch(token, &mut curr_ctx)
+                    self.default_branch(token)
                 }
             };
 
+            if let Some(task) = task {
+                match task {
+                    ParserTask::Enter(new_ctx) => {
+                        let prev_ctx = mem::replace(&mut curr_ctx, new_ctx);
+                        self.prev_ctxs.push(prev_ctx);
+                    }
+                    ParserTask::Switch(new_ctx) => {
+                        curr_ctx = new_ctx;
+                    }
+                    ParserTask::Exit => {
+                        self.exit_ctx(&mut curr_ctx);
+                    }
+                }
+            }
+            
             //TODO: check if function declarations can be nested in GDSL
             if self.scope == Scope::FnBody && token.value == "}" {
                 self.scope_idents.clear();
@@ -99,14 +114,13 @@ impl<'a> Parser<'a> {
         return self.diagnostics;
     }
 
-    fn ident_decl_branch(&mut self, token: Token<'a>, ctx: &mut ParserCtx) -> () {
-        let ident_decl_ctx = ctx.as_ident_decl_ctx();
-        
-        match ident_decl_ctx.subcontext {
+    fn ident_decl_branch(&mut self, token: Token<'a>, ctx: &mut IdentDeclCtx) -> Option<ParserTask> {
+        match ctx.subctx {
             0 => {
                 self.expect_kind(&token, TokenKind::TypeKeyword);
-                ident_decl_ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
-                ident_decl_ctx.subcontext = 1;  
+                ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
+                ctx.subctx = 1;
+                return None;
             }
             1 => {
                 match token.kind {
@@ -125,7 +139,7 @@ impl<'a> Parser<'a> {
                             } else {
                                 self.functions.insert(
                                     token.value,
-                                    Function::new(HashMap::new(), ident_decl_ctx.ident_type)
+                                    Function::new(HashMap::new(), ctx.ident_type)
                                 );
                             }
 
@@ -136,13 +150,9 @@ impl<'a> Parser<'a> {
                                 ); 
                             }
 
-                            let ret_type = ident_decl_ctx.ident_type;
-                            
-                            *ctx = ParserCtx::new_fn_decl();
-                            ctx.as_fn_decl_ctx().ret_type = ret_type;
-
                             self.curr_index += 1;
-                            return;   
+                            let new_ctx = ParserCtx::new_fn_decl(ctx.ident_type);
+                            return Some(ParserTask::Switch(new_ctx));
                         } 
                         
                         if self.scope_idents.contains_key(token.value) {
@@ -151,8 +161,8 @@ impl<'a> Parser<'a> {
                                 format!("Cannot redeclare variable {}", token.value)
                             );
 
-                            ident_decl_ctx.subcontext = 2;
-                            return;
+                            ctx.subctx = 2;
+                            return None;
                         }
                         
                         
@@ -160,19 +170,21 @@ impl<'a> Parser<'a> {
                             Scope::FnBody => {
                                 self.scope_idents.insert(
                                     token.value,
-                                    ident_decl_ctx.ident_type
+                                    ctx.ident_type
                                 );
                             }
                             Scope::Global => {
                                 self.global_idents.insert(
                                     token.value,
-                                    ident_decl_ctx.ident_type
+                                    ctx.ident_type
                                 );
                             }
                         };
 
-                        ident_decl_ctx.is_valid_decl = true;
-                        ident_decl_ctx.subcontext = 2;
+                        ctx.is_valid_decl = true;
+                        ctx.subctx = 2;
+
+                        return None;
                     }
                     TokenKind::Global(_) => {
                         self.push_diagnostic(
@@ -180,28 +192,28 @@ impl<'a> Parser<'a> {
                             format!("Cannot redeclare global variable {}", token.value)
                         );
 
-                        ident_decl_ctx.subcontext = 2;
+                        ctx.subctx = 2;
+                        return None;
                     }
                     _ => {
                         self.push_generic_diagnostic(&token);
-                        self.exit_ctx(ctx);
+                        return Some(ParserTask::Exit);
                     }
                 }
             }
             2 => {
                 match token.value {
                     "[" => {
-                        *ctx = ParserCtx::new_arr_decl();
-                        return;                        
+                        return Some(
+                            ParserTask::Switch(ParserCtx::new_arr_decl())
+                        );
                     }
                     "=" => {
-                        let expr_result_type = ident_decl_ctx.ident_type.clone();
-
-                        *ctx = ParserCtx::new_expr();
-                        ctx.as_expr_ctx().result_type = expr_result_type;                        
+                        let new_ctx = ParserCtx::new_expr(ctx.ident_type.clone());
+                        return Some(ParserTask::Switch(new_ctx));
                     }
                     ";" => {
-                        if ident_decl_ctx.is_valid_decl {
+                        if ctx.is_valid_decl {
                             //TODO: peek back
                             self.scope_idents.insert(
                                 token.value,
@@ -209,11 +221,11 @@ impl<'a> Parser<'a> {
                             );
                         }
 
-                        self.exit_ctx(ctx);
+                        return Some(ParserTask::Exit);
                     }
                     _ => {
                         self.push_generic_diagnostic(&token);
-                        self.exit_ctx(ctx);
+                        return Some(ParserTask::Exit);
                     }
                 }
             }
@@ -223,12 +235,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn ident_assign_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        //TODO
+    fn ident_assign_branch(&mut self, token: Token, ctx: &IdentAssignCtx) -> Option<ParserTask> {
+        todo!()
     }
     
-    fn arr_decl_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        //TODO
+    fn arr_decl_branch(&mut self, token: Token, ctx: &ArrDeclCtx) -> Option<ParserTask> {
+        todo!()
         // self.expect_one_of_kinds(
         //     &token,
         //     &[
@@ -240,66 +252,67 @@ impl<'a> Parser<'a> {
         // );
     }
 
-    fn arr_assign_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-
+    fn arr_assign_branch(&mut self, token: Token, ctx: &mut ArrAssignCtx) -> Option<ParserTask> {
+        todo!()
     }
 
-
-    fn fn_decl_branch(&mut self, token: Token<'a>, ctx: &mut ParserCtx) -> () {
-        let fn_decl_ctx = ctx.as_fn_decl_ctx();
-        
-        match fn_decl_ctx.subcontext {
+    fn fn_decl_branch(&mut self, token: Token<'a>, ctx: &mut FnDeclCtx) -> Option<ParserTask> {
+        match ctx.subctx {
             0 => {
                 if token.value == ")" {
-                    fn_decl_ctx.subcontext = 3;
-                    return;
+                    ctx.subctx = 3;
+                    return None;
                 }
                 
                 if self.expect_kind(&token, TokenKind::TypeKeyword) {
                     let data_type = *TYPE_KEYWORDS.get(token.value).unwrap();
                     
-                    fn_decl_ctx.curr_arg_type = data_type;
-                    fn_decl_ctx.subcontext = 1;
+                    ctx.curr_arg_type = data_type;
+                    ctx.subctx = 1;
                 } else {
-                    fn_decl_ctx.subcontext = 3;
+                    ctx.subctx = 3;
                 }
+
+                return None;
             }
             1 => {
                 if self.expect_kind(&token, TokenKind::Ident(DataType::Unknown)) {
-                    fn_decl_ctx.args.insert(
+                    ctx.args.insert(
                         String::from(token.value),
-                        fn_decl_ctx.curr_arg_type
+                        ctx.curr_arg_type
                     );
                     
-                    fn_decl_ctx.curr_arg_type = DataType::Unknown;
+                    ctx.curr_arg_type = DataType::Unknown;
                 }
 
-                fn_decl_ctx.subcontext = 2;
+                ctx.subctx = 2;
+                return None;
             }
             2 => {
                 if token.value == "," {
-                    fn_decl_ctx.subcontext = 0;
-                    return;
+                    ctx.subctx = 0;
+                    return None;
                 }
 
                 self.expect_value(&token, ")");
-                fn_decl_ctx.subcontext = 3;
+
+                ctx.subctx = 3;
+                return None;
             }
             3 => {
                 if self.expect_value(&token, "{") {
                     self.scope = Scope::FnBody;
                 }
 
-                let args = mem::take(&mut fn_decl_ctx.args);
+                let args = mem::take(&mut ctx.args);
                 self.functions.insert(
                     token.value,
-                    Function::new(args, fn_decl_ctx.ret_type)
+                    Function::new(args, ctx.ret_type)
                 );
 
                 //TODO: we should push a new context rather than switching directly,
-                //I don't remember why but I was thinking about this while I was trying
-                //to fall asleep and it felt really important
-                self.exit_ctx(ctx);
+                //because we need to keep track of the arguments as local idents
+                return Some(ParserTask::Exit);
             }
             _ => {
                 unreachable!();
@@ -307,34 +320,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn fn_call_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let fn_call_ctx = ctx.as_fn_call_ctx();
-        
-        match fn_call_ctx.subcontext {
+    fn fn_call_branch(&mut self, token: Token, ctx: &FnCallCtx) -> Option<ParserTask> {
+        match ctx.subctx {
             0 => {
-                return;
+                return None;
             },
             _ => {
-                self.exit_ctx(ctx);
+                return Some(ParserTask::Exit);
             }
         }
     }
 
-    fn expr_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let expr_ctx = ctx.as_expr_ctx();
-        
-        match expr_ctx.subcontext {
+    fn expr_branch(&mut self, token: Token, ctx: &mut ExprCtx) -> Option<ParserTask> {
+        match ctx.subctx {
             0 => {
                 match token.kind {
                     TokenKind::Ident(data_type) => {
                         if let Some(next_token) = self.peek(1)
                         && next_token.value == "("
                         {
-                            expr_ctx.subcontext = 1;
-                            self.enter_ctx(ctx, ParserCtx::new_fn_call());
-
+                            ctx.subctx = 1;
                             self.curr_index += 1;
-                            return;
+                            return Some(ParserTask::Enter(ParserCtx::new_fn_call()));
                         }
 
                         if (data_type == DataType::Unknown) {
@@ -343,45 +350,49 @@ impl<'a> Parser<'a> {
                                 String::from("Use of variable before declaration")
                             );
                             
-                            expr_ctx.subcontext = 1;
-                            return;
+                            ctx.subctx = 1;
+                            return None;
                         }
 
                         if let Some(vec_type) = token.try_vec_type()
-                        && vec_type == expr_ctx.result_type
+                        && vec_type == ctx.result_type
                         {
-                            //TODO: vec component access subcontext
-                            expr_ctx.subcontext = 100;
-                        } else if data_type != expr_ctx.result_type {
-                            expr_ctx.subcontext = 1;
+                            //TODO: vec component access subctx
+                            ctx.subctx = 100;
+                        } else if data_type != ctx.result_type {
+                            ctx.subctx = 1;
 
                             self.push_diagnostic(
                                 &token,
-                                format!("Unexpected variable type: expected {}, found {}", expr_ctx.result_type, data_type)
+                                format!("Unexpected variable type: expected {}, found {}", ctx.result_type, data_type)
                             );
                         }
+
+                        return None;
                     }
                     TokenKind::Operator => {
                         if self.expect_one_of_values(&token, &["+", "-"]) {
-                            //TODO:: unary operation subcontext
+                            //TODO:: unary operation subctx
                         }
+
+                        return None;
                     }
                     TokenKind::Symbol => {
                         match token.value {
                             "(" => {
-                                expr_ctx.brackets.push('(');
+                                ctx.brackets.push('(');
                             }
                             "[" => {
-                                expr_ctx.brackets.push('[');
+                                ctx.brackets.push('[');
                             }
                             ")" => {
-                                match expr_ctx.brackets.last() {
+                                match ctx.brackets.last() {
                                     Some(&'(') => {},
                                     _ => self.push_generic_diagnostic(&token)
                                 }
                             }
                             "]" => {
-                                match expr_ctx.brackets.last() {
+                                match ctx.brackets.last() {
                                     Some(&'[') => {},
                                     _ => self.push_generic_diagnostic(&token)
                                 }
@@ -391,18 +402,21 @@ impl<'a> Parser<'a> {
                             }
                         }
 
-                        expr_ctx.subcontext = 1;
+                        ctx.subctx = 1;
+
+                        return None;
                     }
                     TokenKind::TypeKeyword => {
                         if let Some(next_token) = self.peek(1) 
                         && next_token.value == "["
                         {
-
-                            //TODO: array initialization subcontext
+                            //TODO: array initialization subctx
                         }
+
+                        return None;
                     }
                     _ => {
-                        match expr_ctx.result_type {
+                        match ctx.result_type {
                             DataType::I8 | DataType::I16 | DataType::I32 => {
                                 self.expect_kind(&token, TokenKind::IntLit);
                             }
@@ -414,76 +428,71 @@ impl<'a> Parser<'a> {
                             }
                         }
 
-                        expr_ctx.subcontext = 1;
+                        ctx.subctx = 1;
+                        return None;
                     }
                 }
             },
             1 => {
                 match token.kind {
+                    //TODO: check operator compatibility
                     TokenKind::Operator => {
-                        expr_ctx.subcontext = 0;
+                        ctx.subctx = 0;
                     }
                     _ => {
                         if token.value == ";" {
-                            self.exit_ctx(ctx);
+                            return Some(ParserTask::Exit);
                         } else {
                             self.push_generic_diagnostic(&token);
                         }
                     }
                 }
+
+                return None;
             }
             //TODO: Expect vector component access
             100 => {
-                
+                return None;
             }
             _ => {
-                self.exit_ctx(ctx);
-                return;
+                return Some(ParserTask::Exit);
             }
         }
     }
 
-    fn cast_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
-        let ctx_data = ctx.as_cast_ctx();
-        
-        match ctx_data.subcontext {
+    fn cast_branch(&mut self, token: Token, ctx: &CastCtx) -> Option<ParserTask> {
+        match ctx.subctx {
             0 => {
-                return;
+                return None;
             },
             _ => {
-                self.exit_ctx(ctx);
-                return;
+                return Some(ParserTask::Exit);
             }
         }
     }
 
-    fn default_branch(&mut self, token: Token, ctx: &mut ParserCtx) -> () {
+    fn default_branch(&mut self, token: Token) -> Option<ParserTask> {
         match (token.kind, token.value) {
             (TokenKind::TypeKeyword, _) => {
-                self.enter_ctx(ctx, ParserCtx::new_ident_decl());
-                let ident_decl_ctx = ctx.as_ident_decl_ctx();
-
                 //We can safely unwrap because TypeKeyword tokens can only be created
                 //when the tokenizer finds the token value in the TYPE_KEYWORDS map
-                ident_decl_ctx.ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
-                ident_decl_ctx.subcontext = 1;
+                let ident_type = *TYPE_KEYWORDS.get(token.value).unwrap();
+                return Some(ParserTask::Enter(
+                    ParserCtx::new_ident_decl(1, ident_type, true)
+                ));
             },
             (TokenKind::MiscKeyword, "uniform") |
             (TokenKind::MiscKeyword, "const") => {
-                self.enter_ctx(ctx, ParserCtx::new_ident_decl());
-                let ident_decl_ctx = ctx.as_ident_decl_ctx();
-                ident_decl_ctx.is_mut = false;
-                ident_decl_ctx.subcontext = 0;
+                return Some(ParserTask::Enter(
+                    ParserCtx::new_ident_decl(0, DataType::Unknown, false)
+                ));
             }
-            _ => {}
+            _ => {
+                return None;
+            }
         }
     }
 
-    fn enter_ctx(&mut self, curr_ctx: &mut ParserCtx, new_context: ParserCtx) -> () {
-        let prev_ctx = mem::replace(curr_ctx, new_context);
-        self.prev_ctxs.push(prev_ctx);
-    } 
-    
     fn exit_ctx(&mut self, curr_ctx: &mut ParserCtx) -> () {
         *curr_ctx = 
             self.prev_ctxs
@@ -622,26 +631,26 @@ impl<'a> Parser<'a> {
 
     fn debug_iteration(&self, ctx: &ParserCtx) -> () {
         if let Some(curr_token) = self.tokens.get(self.curr_index) {
-            let subcontext = match ctx {
-                ParserCtx::ArrAssign(ctx) => ctx.subcontext,
-                ParserCtx::ArrDecl(ctx) => ctx.subcontext,
-                ParserCtx::Cast(ctx) => ctx.subcontext,
-                ParserCtx::Expr(ctx) => ctx.subcontext,
-                ParserCtx::FnCall(ctx) => ctx.subcontext,
-                ParserCtx::FnDecl(ctx) => ctx.subcontext,
-                ParserCtx::IdentAssign(ctx) => ctx.subcontext,
-                ParserCtx::IdentDecl(ctx) => ctx.subcontext,
+            let subctx = match ctx {
+                ParserCtx::ArrAssign(ctx) => ctx.subctx,
+                ParserCtx::ArrDecl(ctx) => ctx.subctx,
+                ParserCtx::Cast(ctx) => ctx.subctx,
+                ParserCtx::Expr(ctx) => ctx.subctx,
+                ParserCtx::FnCall(ctx) => ctx.subctx,
+                ParserCtx::FnDecl(ctx) => ctx.subctx,
+                ParserCtx::IdentAssign(ctx) => ctx.subctx,
+                ParserCtx::IdentDecl(ctx) => ctx.subctx,
                 ParserCtx::Default => 0,
             };
 
-            println!("curr_index: {} - token value: {} - subcontext: {}", self.curr_index, curr_token.value, subcontext);
+            println!("curr_index: {} - token value: {} - subctx: {}", self.curr_index, curr_token.value, subctx);
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct IdentDeclCtx {
-    subcontext: usize,
+    subctx: usize,
     is_valid_decl: bool,
     ident_type: DataType,
     is_mut: bool
@@ -649,23 +658,23 @@ struct IdentDeclCtx {
 
 #[derive(Debug, Clone, PartialEq)]
 struct IdentAssignCtx {
-    subcontext: usize,
+    subctx: usize,
     ident_type: DataType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ArrDeclCtx {
-    subcontext: usize
+    subctx: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ArrAssignCtx {
-    subcontext: usize
+    subctx: usize
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct FnDeclCtx {
-    subcontext: usize,
+    subctx: usize,
     curr_arg_type: DataType,
     args: HashMap<String, DataType>,
     ret_type: DataType
@@ -673,12 +682,12 @@ struct FnDeclCtx {
 
 #[derive(Debug, Clone, PartialEq)]
 struct FnCallCtx {
-    subcontext: usize,
+    subctx: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ExprCtx {
-    subcontext: usize,
+    subctx: usize,
     lhs: Option<DataType>,
     operator: &'static str,
     rhs: DataType,
@@ -688,7 +697,7 @@ struct ExprCtx {
 
 #[derive(Debug, Clone, PartialEq)]
 struct CastCtx {
-    subcontext: usize,
+    subctx: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -709,127 +718,69 @@ impl ParserCtx {
         return ParserCtx::Default;
     }
     
-    fn new_ident_decl() -> ParserCtx {
+    fn new_ident_decl(subctx: usize, ident_type: DataType, is_mut: bool) -> ParserCtx {
         return ParserCtx::IdentDecl(IdentDeclCtx {
-            subcontext: 0,
+            subctx: subctx,
             is_valid_decl: false,
-            ident_type: DataType::Unknown,
-            is_mut: false
+            ident_type: ident_type,
+            is_mut: is_mut
         });
     }
 
     fn new_ident_assign() -> ParserCtx {
         return ParserCtx::IdentAssign(IdentAssignCtx {
-            subcontext: 0 ,
+            subctx: 0 ,
             ident_type: DataType::Unknown,
         });
     }
 
     fn new_arr_decl() -> ParserCtx {
         return ParserCtx::ArrDecl(ArrDeclCtx {
-            subcontext: 0
+            subctx: 0
         });
     }
 
     fn new_arr_assign() -> ParserCtx {
         return ParserCtx::ArrAssign(ArrAssignCtx {
-            subcontext: 0
+            subctx: 0
         });
     }
 
-    fn new_fn_decl() -> ParserCtx {
+    fn new_fn_decl(ret_type: DataType) -> ParserCtx {
         return ParserCtx::FnDecl(FnDeclCtx {
-            subcontext: 0,
+            subctx: 0,
             curr_arg_type: DataType::Unknown,
             args: HashMap::new(),
-            ret_type: DataType::Unknown
+            ret_type: ret_type
         });
     }
 
     fn new_fn_call() -> ParserCtx {
         return ParserCtx::FnCall(FnCallCtx {
-            subcontext: 0,
+            subctx: 0,
         });
     }
 
-    fn new_expr() -> ParserCtx {
+    fn new_expr(result_type: DataType) -> ParserCtx {
         return ParserCtx::Expr(ExprCtx {
-            subcontext: 0,
+            subctx: 0,
             lhs: None,
             operator: "",
             rhs: DataType::Unknown,
-            result_type: DataType::Unknown,
+            result_type: result_type,
             brackets: Vec::with_capacity(10)
         });
     }
 
     fn new_cast() -> ParserCtx {
-        return ParserCtx::Cast(CastCtx { subcontext: 0 });
+        return ParserCtx::Cast(CastCtx { subctx: 0 });
     }
+}
 
-    fn as_ident_decl_ctx(&mut self) -> &mut IdentDeclCtx {
-        if let ParserCtx::IdentDecl(context) = self {
-            return context;
-        } else {
-            panic!("Expected IdentDecl");
-        }
-    }
-
-    fn as_ident_assign_ctx(&mut self) -> &mut IdentAssignCtx {
-        if let ParserCtx::IdentAssign(context) = self {
-            return context;
-        } else {
-            panic!("Expected IdentDecl");
-        }
-    }
-
-    fn as_arr_decl_ctx(&mut self) -> &mut ArrDeclCtx {
-        if let ParserCtx::ArrDecl(context) = self {
-            return context;
-        } else {
-            panic!("Expected IdentDecl");
-        }
-    }
-
-    fn as_arr_assign_ctx(&mut self) -> &mut ArrAssignCtx {
-        if let ParserCtx::ArrAssign(context) = self {
-            return context;
-        } else {
-            panic!("Expected IdentDecl");
-        }
-    }
-
-    fn as_fn_decl_ctx(&mut self) -> &mut FnDeclCtx {
-        if let ParserCtx::FnDecl(context) = self {
-            return context;
-        } else {
-            panic!("Expected FnDecl");
-        }
-    }
-
-    fn as_fn_call_ctx(&mut self) -> &mut FnCallCtx {
-        if let ParserCtx::FnCall(context) = self {
-            return context;
-        } else {
-            panic!("Expected FnCall");
-        }
-    }
-    
-    fn as_expr_ctx(&mut self) -> &mut ExprCtx {
-        if let ParserCtx::Expr(context) = self {
-            return context;
-        } else {
-            panic!("Expected Operation");
-        }
-    }
-
-    fn as_cast_ctx(&mut self) -> &mut CastCtx {
-        if let ParserCtx::Cast(context) = self {
-            return context;
-        } else {
-            panic!("Expected Operation");
-        }
-    }
+enum ParserTask {
+    Switch(ParserCtx),
+    Enter(ParserCtx),
+    Exit
 }
 
 #[derive(PartialEq)]
