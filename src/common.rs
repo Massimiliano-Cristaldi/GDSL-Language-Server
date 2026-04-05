@@ -130,8 +130,8 @@ pub struct Token<'a> {
 }
 
 impl<'a> Token<'a> {
-    pub fn len(&'a self) -> usize {
-        return self.value.len();
+    pub fn head(&'a self) -> usize {
+        return self.tail + self.value.len();
     }
 
     pub fn is_fn(&'a self) -> bool {

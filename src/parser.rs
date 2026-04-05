@@ -15,7 +15,7 @@ pub struct Parser<'a> {
     global_idents: HashMap<&'a str, DataType>,
     scope_idents: HashMap<&'a str, DataType>,
     prev_ctxs: Vec<ParserCtx>,
-    functions: HashMap<&'a str, Function>,
+    functions: HashMap<String, Function>,
     diagnostics: Vec<Diagnostic>
 }
 
@@ -38,7 +38,7 @@ impl<'a> Parser<'a> {
             curr_index: 0,
             scope: Scope::Global,
             prev_ctxs: vec![],
-            global_idents: HashMap::new(),
+            global_idents: HashMap::with_capacity(32),
             scope_idents: HashMap::with_capacity(32),
             functions: HashMap::new(),
             diagnostics: Vec::with_capacity(256)
@@ -99,7 +99,6 @@ impl<'a> Parser<'a> {
                 }
             }
             
-            //TODO: check if function declarations can be nested in GDSL
             if self.scope == Scope::FnBody && token.value == "}" {
                 self.scope_idents.clear();
                 self.scope = Scope::Global;
@@ -109,6 +108,21 @@ impl<'a> Parser<'a> {
             if self.can_recover(&token, &curr_ctx) {
                 self.exit_ctx(&mut curr_ctx);
             }
+        }
+
+        if self.scope == Scope::FnBody {
+            //We can safely unwrap because we cannot change scope if the document is empty
+            let token =
+                self
+                .tokens
+                .last()
+                .unwrap()
+                .clone();
+            
+            self.push_diagnostic_at_head(
+                &token,
+                String::from("Expected '}'")
+            );
         }
 
         return self.diagnostics;
@@ -138,7 +152,7 @@ impl<'a> Parser<'a> {
                                 );
                             } else {
                                 self.functions.insert(
-                                    token.value,
+                                    String::from(token.value),
                                     Function::new(HashMap::new(), ctx.ident_type)
                                 );
                             }
@@ -151,7 +165,7 @@ impl<'a> Parser<'a> {
                             }
 
                             self.curr_index += 1;
-                            let new_ctx = ParserCtx::new_fn_decl(ctx.ident_type);
+                            let new_ctx = ParserCtx::new_fn_decl(String::from(token.value), ctx.ident_type);
                             return Some(ParserTask::Switch(new_ctx));
                         } 
                         
@@ -305,13 +319,13 @@ impl<'a> Parser<'a> {
                 }
 
                 let args = mem::take(&mut ctx.args);
+                let fn_name = mem::take(&mut ctx.fn_name);
+                
                 self.functions.insert(
-                    token.value,
+                    fn_name,
                     Function::new(args, ctx.ret_type)
                 );
 
-                //TODO: we should push a new context rather than switching directly,
-                //because we need to keep track of the arguments as local idents
                 return Some(ParserTask::Exit);
             }
             _ => {
@@ -616,7 +630,7 @@ impl<'a> Parser<'a> {
             msg,
             token.line,
             token.tail,
-            token.tail + token.len()
+            token.head()
         );
         
         self.diagnostics.push(diagnostic);
@@ -629,21 +643,32 @@ impl<'a> Parser<'a> {
         );
     }
 
+    fn push_diagnostic_at_head(&mut self, token: &Token, msg: String) -> () {
+        let diagnostic = Diagnostic {
+            line: token.line,
+            msg: msg,
+            col_start: token.head(),
+            col_end: token.head()
+        };
+        
+        self.diagnostics.push(diagnostic);
+    }
+
     fn debug_iteration(&self, ctx: &ParserCtx) -> () {
         if let Some(curr_token) = self.tokens.get(self.curr_index) {
-            let subctx = match ctx {
-                ParserCtx::ArrAssign(ctx) => ctx.subctx,
-                ParserCtx::ArrDecl(ctx) => ctx.subctx,
-                ParserCtx::Cast(ctx) => ctx.subctx,
-                ParserCtx::Expr(ctx) => ctx.subctx,
-                ParserCtx::FnCall(ctx) => ctx.subctx,
-                ParserCtx::FnDecl(ctx) => ctx.subctx,
-                ParserCtx::IdentAssign(ctx) => ctx.subctx,
-                ParserCtx::IdentDecl(ctx) => ctx.subctx,
-                ParserCtx::Default => 0,
+            let (ctx_str, subctx) = match ctx {
+                ParserCtx::ArrAssign(ctx) => ("AssAssign", ctx.subctx),
+                ParserCtx::ArrDecl(ctx) => ("ArrDecl", ctx.subctx),
+                ParserCtx::Cast(ctx) => ("Cast", ctx.subctx),
+                ParserCtx::Expr(ctx) => ("Expr", ctx.subctx),
+                ParserCtx::FnCall(ctx) => ("FnCall", ctx.subctx),
+                ParserCtx::FnDecl(ctx) => ("FnDecl", ctx.subctx),
+                ParserCtx::IdentAssign(ctx) => ("IdentAssign", ctx.subctx),
+                ParserCtx::IdentDecl(ctx) => ("IdentDecl", ctx.subctx),
+                ParserCtx::Default => ("Default", 0),
             };
 
-            println!("curr_index: {} - token value: {} - subctx: {}", self.curr_index, curr_token.value, subctx);
+            println!("curr_index: {} | {:?} | scope: {:?} | ctx: {} | subctx: {}", self.curr_index, curr_token, self.scope, ctx_str, subctx);
         }
     }
 }
@@ -675,6 +700,7 @@ struct ArrAssignCtx {
 #[derive(Debug, Clone, PartialEq)]
 struct FnDeclCtx {
     subctx: usize,
+    fn_name: String,
     curr_arg_type: DataType,
     args: HashMap<String, DataType>,
     ret_type: DataType
@@ -746,9 +772,10 @@ impl ParserCtx {
         });
     }
 
-    fn new_fn_decl(ret_type: DataType) -> ParserCtx {
+    fn new_fn_decl(fn_name: String, ret_type: DataType) -> ParserCtx {
         return ParserCtx::FnDecl(FnDeclCtx {
             subctx: 0,
+            fn_name: fn_name,
             curr_arg_type: DataType::Unknown,
             args: HashMap::new(),
             ret_type: ret_type
@@ -783,7 +810,7 @@ enum ParserTask {
     Exit
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum Scope {
     Global,
     FnBody,

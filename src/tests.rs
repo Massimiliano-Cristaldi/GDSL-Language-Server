@@ -95,6 +95,12 @@ fn test2() {
             25,
             31,
         ),
+        Diagnostic::new(
+            String::from("Expected '}'"),
+            14,
+            34,
+            34
+        ),
     ];
     assert_eq!(result, expected);
 

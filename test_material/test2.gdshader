@@ -13,4 +13,3 @@ void fragment() {
 	// float alpha = sqrt(foo(1) + foo(2) + 0.1);
 	float alpha = sqrt(1.0 + 1.0 + 0.1);
 	COLOR.a = alpha + fade_factor;
-}
